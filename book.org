@@ -1,0 +1,9 @@
+#+TITLE: My Book
+#+AUTHOR: Your Name
+#+DATE: 2026
+#+LANGUAGE: en
+
+* Introduction
+This is the introduction. You can also include other files:
+
+#+INCLUDE: "chapters/01-introduction.org"

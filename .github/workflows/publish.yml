@@ -1,0 +1,97 @@
+name: Publish Book Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'        # Semantic version tags
+    branches:
+      - main
+      - 'sv'            # Add other language branches here
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    env:
+      BOOK_EDITION: "First Edition"  # Default edition, can override per branch
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y emacs texlive-full python3-pygments pandoc zip
+
+      - name: Determine version and language
+        id: vars
+        run: |
+          EDITION="${BOOK_EDITION:-First Edition}"
+          
+          if [[ "$GITHUB_REF" == refs/heads/* ]]; then
+            LANG=$(echo "$GITHUB_REF" | sed 's|refs/heads/||')
+            VERSION="dev"
+            # Map main branch to en
+            if [[ "$LANG" == "main" ]]; then LANG="en"; fi
+          else
+            TAG="${GITHUB_REF_NAME}"               # e.g., v1.2.3 or v1.2.3-sv
+            VERSION=$(echo "$TAG" | cut -d'-' -f1) # v1.2.3
+            LANG=$(echo "$TAG" | cut -d'-' -f2)    # sv (optional)
+            LANG=${LANG:-en}                        # default to English
+          fi
+
+          EDITION_SLUG=$(echo "$EDITION" | tr '[:upper:]' '[:lower:]' | tr ' ' '-')
+
+          echo "lang=$LANG" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "edition_slug=$EDITION_SLUG" >> $GITHUB_OUTPUT
+
+      - name: Build book
+        run: |
+          echo "Building book for language: ${{ steps.vars.outputs.lang }}, edition: ${{ env.BOOK_EDITION }}, version: ${{ steps.vars.outputs.version }}"
+          emacs --batch -l ./publish.el -f book-publish-all
+          cd target/html
+          zip -r ../../html.zip .
+          cd ../../
+
+      - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/')
+        id: create_release
+        uses: actions/create-release@v1
+        with:
+          tag_name: ${{ steps.vars.outputs.version }}
+          release_name: "Book - ${{ steps.vars.outputs.lang }} - ${{ env.BOOK_EDITION }} - ${{ steps.vars.outputs.version }}"
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Book Assets
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          ASSETS=(
+            "target/pdf/book.pdf application/pdf pdf"
+            "target/epub/*.epub application/epub+zip epub"
+            "target/html.zip application/zip html.zip"
+          )
+
+          for ASSET in "${ASSETS[@]}"; do
+            PATH=$(echo $ASSET | awk '{print $1}')
+            TYPE=$(echo $ASSET | awk '{print $2}')
+            EXT=$(echo $ASSET | awk '{print $3}')
+
+            if [[ "$EXT" == "html.zip" ]]; then
+              NAME="book-${{ steps.vars.outputs.lang }}-${{ steps.vars.outputs.version }}-${{ steps.vars.outputs.edition_slug }}-html.zip"
+            else
+              NAME="book-${{ steps.vars.outputs.lang }}-${{ steps.vars.outputs.version }}-${{ steps.vars.outputs.edition_slug }}.${EXT}"
+            fi
+
+            echo "Uploading $PATH as $NAME"
+            gh release upload ${{ steps.create_release.outputs.upload_url }} $PATH \
+              --name "$NAME" \
+              --clobber \
+              --content-type "$TYPE"
+          done
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
